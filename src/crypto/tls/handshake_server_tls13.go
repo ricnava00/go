@@ -566,36 +566,38 @@ func (hs *serverHandshakeStateTLS13) pickCertificate() error {
 		return err
 	}
 
-	hs.sigAlg, err = selectSignatureScheme(c.vers, certificate, hs.clientHello.supportedSignatureAlgorithms)
-	if err != nil {
-		// getCertificate returned a certificate that is unsupported or
-		// incompatible with the client's signature algorithms.
-		c.sendAlert(alertHandshakeFailure)
-		return err
-	}
-
-	hs.cert = certificate
-
+	var fallback = true
 	if hs.clientHello.delegatedCredentialSupported && len(hs.clientHello.supportedSignatureAlgorithmsDC) > 0 {
 		// getDelegatedCredential selects a delegated credential that the client has advertised support for, if possible.
-		delegatedCredentialPair, err := getDelegatedCredential(clientHelloInfo(hs.ctx, c, hs.clientHello), hs.cert)
+		delegatedCredentialPair, err := getDelegatedCredential(clientHelloInfo(hs.ctx, c, hs.clientHello), certificate)
 		if err != nil {
 			// a Delegated Credential was not found. Fallback to the certificate.
-			return nil
-		}
-		if delegatedCredentialPair.DC != nil && delegatedCredentialPair.PrivateKey != nil {
+		} else if delegatedCredentialPair.DC != nil && delegatedCredentialPair.PrivateKey != nil {
 			// Even if the Delegated Credential has already been marshalled, be sure it is the correct one.
 			delegatedCredentialPair.DC.raw, err = delegatedCredentialPair.DC.Marshal()
 			if err != nil {
 				// invalid Delegated Credential. Fallback to the certificate.
-				return nil
-			}
-			hs.sigAlg = delegatedCredentialPair.DC.cred.expCertVerfAlgo
+			} else {
+				hs.sigAlg = delegatedCredentialPair.DC.cred.expCertVerfAlgo
 
-			hs.cert.PrivateKey = delegatedCredentialPair.PrivateKey
-			hs.cert.DelegatedCredential = delegatedCredentialPair.DC.raw
+				certificate.PrivateKey = delegatedCredentialPair.PrivateKey
+				certificate.DelegatedCredential = delegatedCredentialPair.DC.raw
+				fallback = false
+			}
 		}
 	}
+	if(fallback) {
+		hs.sigAlg, err = selectSignatureScheme(c.vers, certificate, hs.clientHello.supportedSignatureAlgorithms)
+		if err != nil {
+			// getCertificate returned a certificate that is unsupported or
+			// incompatible with the client's signature algorithms.
+			c.sendAlert(alertHandshakeFailure)
+			return err
+		}
+	}
+
+	hs.cert = certificate
+
 	return nil
 }
 
